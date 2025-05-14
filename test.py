@@ -401,6 +401,8 @@ def compare_particle_counts(particle_amount, myrobot, motions, landmarks):
     #function to compare different particle counts
     avg_errors = []
     avtimes = []
+    std_times = []
+    std_errors = []
 
     for N in particle_amount:
         averrors = []
@@ -419,17 +421,21 @@ def compare_particle_counts(particle_amount, myrobot, motions, landmarks):
             averrors.append(np.mean(errors))
             times.append(end-start)
         avtimes.append(np.mean(times))
+        std_times.append(np.std(times))
         avg_errors.append(np.mean(averrors))
+        std_errors.append(np.std(averrors))
 
         #print(f"Particles: {N}, Avg error: {avg_errors[-1]:.2f}")
     print("Errors:", avg_errors)
+    print("std errors:", std_errors)
     print("Times:", avtimes)
+    print("std times:", std_times)
 
     # Plot results
 
     plt.figure(figsize=(12, 4))
     plt.subplot(1, 2, 1)
-    plt.plot(particle_amount, avg_errors, marker='o')
+    plt.errorbar(particle_amount, avg_errors, yerr=std_errors, fmt='-o', capsize=5)
     plt.xlabel("Number of particles")
     plt.ylabel("Average localization error (m)")
     plt.title("Effect of particle count on accuracy")
@@ -437,7 +443,7 @@ def compare_particle_counts(particle_amount, myrobot, motions, landmarks):
 
     # Plot execution time
     plt.subplot(1, 2, 2)
-    plt.plot(particle_amount, avtimes, marker='o', color='orange')
+    plt.errorbar(particle_amount, avtimes, yerr=std_times, fmt='-o', color='orange', capsize=5)
     plt.xlabel("Number of particles")
     plt.ylabel("Average execution time (s)")
     plt.title("Effect of particle count on execution time")
@@ -698,7 +704,7 @@ for i in range(15):
 
 #the main testing part
 start = time.time()
-particle_filter(2000, myrobot, motions, presetStreetnames)#tried with 1500, 2000, 2500, 3000
+particle_filter(2000, myrobot, motions, presetStreetnames)#tried with 2000, 2500, 3000, 3500
 end = time.time()
 print("Execution time: ",end-start)
 freeimage.download()
