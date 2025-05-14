@@ -8,6 +8,10 @@ from shapely.geometry import LineString, Point, Polygon
 from math import cos, sin, sqrt, pi, exp, atan2
 from motion_planner import MotionPlanner
 
+'''
+Implementation of a robot class
+'''
+
 class Robot:
     def __init__(self):
         self.x = 0.0

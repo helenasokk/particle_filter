@@ -21,7 +21,6 @@ class MotionPlanner:
 
 
     def generate_waypoints(self):
-        MAX_TURN_ANGLE = np.radians(100)
         waypoints = []
         prev_x, prev_y = self.path[0]
 
@@ -31,12 +30,6 @@ class MotionPlanner:
             distance = np.hypot(dx, dy)
 
             rotation = np.arctan2(dy, dx)
-            '''if waypoints:
-                prev_rotation = waypoints[-1].rotation
-                delta_rotation = self.normalize_angle(rotation - prev_rotation)
-                if abs(delta_rotation) > MAX_TURN_ANGLE:
-                    print(f"Warning: Skipping sharp turn of {np.degrees(delta_rotation):.2f}° at ({x:.2f}, {y:.2f})")
-                    continue'''
 
             #number of segments to divide the path into
             if distance > self.dist:

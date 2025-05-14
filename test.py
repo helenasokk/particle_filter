@@ -12,8 +12,14 @@ from motion_planner import MotionPlanner
 import os
 import imageio
 from imageio.plugins import freeimage
+import matplotlib.pyplot as plt
+import time
 
+''''
+Code for running and testing the particle filter
+'''
 
+#for saving particle filter steps as images
 frame_folder = "frames"
 os.makedirs(frame_folder, exist_ok=True)
 
@@ -51,13 +57,12 @@ route_line = route_edges.union_all()
 # convert to a GeoDataFrame
 route_gdf = gpd.GeoDataFrame(geometry=[route_line], crs=edges.crs)
 
-# for now fetch buildings as landmarks in Tartu
+#fetch street names as landmarks in Tartu
+#here highway: bus_stop gives all bus stop names
 streetnames = ox.features_from_place(location, tags={'highway': True})
-# highway = bus_stop? -> peaks saama bussipeatused kätte
 
 # streetnames['name'] can fetch info based on deteced street name
 # after that streetnames['geometry'] gives info either POINT(x,y) (should be bus stop) or LINETRING(x y, x y)
-#buildings['geometry'] = buildings.centroid
 
 # project to UTM for accurate distance measurements
 utm_crs = ox.projection.project_gdf(edges).crs
@@ -71,39 +76,14 @@ route_gdf = route_gdf.to_crs(utm_crs)
 # extract route points
 route_nodes = nodes.loc[route]
 route_points = list(route_nodes['geometry'])
-
+#for getting the difference between vehicles position and estimated position
 def eval_estimate(estimated_pos, true_pos):
     dx = estimated_pos[0] - true_pos[0]
     dy = estimated_pos[1] - true_pos[1]
     return math.hypot(dx, dy)
 
-def resample(particles, weights):
-    N = len(particles)
-    new_particles = []
-    
-    # Compute cumulative sum of weights
-    cumulative_weights = np.cumsum(weights)
-    
-    # Generate a random starting point
-    start = random.uniform(0, 1/N)
-    
-    # Create N equally spaced pointers
-    positions = [start + i/N for i in range(N)]
-    
-    index = 0
-    for pos in positions:
-        while cumulative_weights[index] < pos:
-            index += 1
-        # Copy selected particle
-        selected_particle = Robot()
-        selected_particle.set(particles[index].x, particles[index].y, particles[index].orientation)
-        selected_particle.set_noise(particles[index].forward_noise, particles[index].turn_noise, particles[index].sense_noise)
-        new_particles.append(selected_particle)
-    
-    return new_particles
-
-
 def resample_particles(particles, weights):
+    #resample particles based on their weights
     N = len(particles)
     new_particles = []
     index = int(random.random() * N)
@@ -121,6 +101,8 @@ def resample_particles(particles, weights):
     return new_particles
 
 def initialize_particles_near_roads(N, edges):
+    #the particles need to be close to the road network
+    #this improves performance and accuracy
     particles = []
     
     while len(particles) < N:
@@ -142,7 +124,7 @@ def initialize_particles_near_roads(N, edges):
         angle = atan2(pt2.y - pt1.y, pt2.x - pt1.x)
         
         offset_distance = 3
-        x = random_point.x + offset_distance * cos(angle + pi/2)  # Offset to right side
+        x = random_point.x + offset_distance * cos(angle + pi/2)  #offset to right side
         y = random_point.y + offset_distance * sin(angle + pi/2)
 
         # Add some noise
@@ -160,7 +142,9 @@ def initialize_particles_near_roads(N, edges):
     
     return particles
 
-def get_closest_landmarks(robot, detected_name, isStation, closest_landmarks, max_distance=100, max_landmarks=10):
+def get_closest_landmarks(robot, detected_name, isStation, closest_landmarks):
+    #this function fetches the closest OSM landmarks based on 
+    #ground truth landmarks defined in presetStreetnames
 
     if isStation:
         landmarks = streetnames['geometry'].loc[(streetnames['name'] == detected_name) & (streetnames['highway']=='bus_stop')]
@@ -179,6 +163,9 @@ def get_closest_landmarks(robot, detected_name, isStation, closest_landmarks, ma
     return nearby_landmarks
 
 def get_streetname(robot, nameindex, presetStreetnames, x_coord, y_coord):
+    #this returns the street name for function get_closest_landmarks
+    #based on how close is the vehicle to the ground truth landmark
+    #or to avoid getting no street name at all, landmark which is closest to the predefined path is chosen
     if nameindex >= len(presetStreetnames):
         return ''
     location = presetStreetnames.iloc[nameindex]['geometry']
@@ -200,8 +187,8 @@ def is_in_front(robot, landmark):
         dy = landmark[1] - robot.y
     angle_to_landmark = atan2(dy, dx)
     angle_diff = (angle_to_landmark - robot.orientation + pi) % (2 * pi) - pi
-    #return (abs(angle_diff) < pi / 2) #only in front
-    #return (sqrt(dx**2+dy**2) <=200)#only distance
+    #return (abs(angle_diff) < pi / 2) #only in front [for testing]
+    #return (sqrt(dx**2+dy**2) <=200)#only distance [for testing]
     return (abs(angle_diff) < pi / 2) & (sqrt(dx**2+dy**2) <=200)  # Only keep landmarks in front (±90 degrees) and within 200 meters
 
 def snapToRoad(robot, edges):
@@ -212,6 +199,7 @@ def snapToRoad(robot, edges):
     robot.set(nearest_point.x, nearest_point.y, robot.orientation)
 
 def snapToRoad2(robot, edges, prev_edge_id=None, angle_weight=0.5, continue_weight=1.0):
+    #place the robot on to the closest road and include previous road information as well
     point = Point(robot.x, robot.y)
 
     # nearby edges
@@ -253,15 +241,19 @@ def snapToRoad2(robot, edges, prev_edge_id=None, angle_weight=0.5, continue_weig
     return best_edge_id
 
 def get_street_midpoint(landmarks, noise_std=1.0):
-    # Convert to coordinates
+    #this function is used oonly once when initializing the vehicle
+    #based on the first sensed landmark
+
+    #convert to coordinates
     coords = [(pt.x, pt.y) for pt in landmarks if isinstance(pt, Point)]
     
     if len(coords) < 2:
-        return coords[0]  # Not enough points for a line
+        return coords[0]  #not enough points for a line
     
     line = LineString(coords)
     midpoint = line.interpolate(line.length / 2)
 
+    #add some noise
     noisy_x = midpoint.x + random.gauss(0, noise_std)
     noisy_y = midpoint.y + random.gauss(0, noise_std)
     
@@ -270,7 +262,7 @@ def get_street_midpoint(landmarks, noise_std=1.0):
 
 route_tuples = [(p.x, p.y) for p in route_points]
 # Initialize MotionPlanner with the waypoints
-planner = MotionPlanner(route_tuples, 50)# moving in 10 meter intervals? can increase
+planner = MotionPlanner(route_tuples, 50)# moving in 50 meter intervals? can increase
 motions = planner.get_motion_commands()  # Get planned turn-distance commands
 
 # Initialize Robot
@@ -290,11 +282,9 @@ myrobot.set(start_x, start_y, 0)  # Start facing 0 radians
 #myrobot.set_noise(0.5, 0.1, 2.0)
 myrobot.set_noise(0.3, 0.05, 1.0)
 
-import matplotlib.pyplot as plt
-import numpy as np
-import time
-
 def evaluate_particle_filter(N, myrobot, particles, motions, presetStreetnames):
+    #this is for evaluating the particle filter
+    #errors, spreads, true_path and estimated_path are recorded for plotting
     errors = []
     spreads_x = []
     spreads_y = []
@@ -339,7 +329,7 @@ def evaluate_particle_filter(N, myrobot, particles, motions, presetStreetnames):
         # Calculate weights
         if len(closest_landm) == 0:
             #print("No landmarks detected, moving particles based on motion.")
-            # i think here i would need a better strategy, leave weights the same?
+            # giving uniform weights when no landmakrs detected
             weights = [1.0 / N] * N
         else:
             weights = [p.measurement_prob(Z, closest_landm) for p in particles]
@@ -408,6 +398,7 @@ def evaluate_particle_filter(N, myrobot, particles, motions, presetStreetnames):
     return errors, spreads_x, spreads_y
 
 def compare_particle_counts(particle_amount, myrobot, motions, landmarks):
+    #function to compare different particle counts
     avg_errors = []
     avtimes = []
 
@@ -444,7 +435,7 @@ def compare_particle_counts(particle_amount, myrobot, motions, landmarks):
     plt.title("Effect of particle count on accuracy")
     plt.grid(True)
 
-    # Plot Spread
+    # Plot execution time
     plt.subplot(1, 2, 2)
     plt.plot(particle_amount, avtimes, marker='o', color='orange')
     plt.xlabel("Number of particles")
@@ -495,8 +486,6 @@ def particle_filter(N, myrobot, motions, presetStreetnames):
             closest_landmarks.append(presetStreetnames.iloc[0]['geometry'])
             closest_landm = get_closest_landmarks(myrobot, detected_name, isStation, closest_landmarks)
             #Now we would like to chnge robot position according to that detected street
-            #mean_x = sum(landmark.x if isinstance(landmark, Point) else landmark[0] for landmark in closest_landm) / len(closest_landm)
-            #mean_y = sum(landmark.y if isinstance(landmark, Point) else landmark[1] for landmark in closest_landm) / len(closest_landm)
             mean_x, mean_y = get_street_midpoint(closest_landm)
             myrobot.set(mean_x, mean_y, turn)
             prev_edge_id = snapToRoad2(myrobot, edges, prev_edge_id)
@@ -524,7 +513,7 @@ def particle_filter(N, myrobot, motions, presetStreetnames):
         # Calculate weights
         if len(closest_landm) == 0:
             print("No landmarks detected, moving particles based on motion and assigning uniform weights.")
-            # i think here i would need a better strategy, leave weights the same?
+            # giving uniform weights when no landmakrs detected
             weights = [1.0 / N] * N
         else:
             weights = [p.measurement_prob(Z, closest_landm) for p in particles]
@@ -575,15 +564,12 @@ def particle_filter(N, myrobot, motions, presetStreetnames):
             plt.scatter(*zip(*coords), color='green', s=10, alpha=0.7, label="Landmarks (from OSM)")
 
         # Particles
-        #particle_positions = [(p.x, p.y) for p in particles]
-        '''if particle_positions:
-            plt.scatter(*zip(*particle_positions), color='red', s=5, alpha=0.5, label='Particles')'''
         if particles:
             for p in particles:
                 plt.arrow(p.x, p.y, 5 * math.cos(p.orientation), 5 * math.sin(p.orientation), 
                         head_width=3, color='red', alpha=0.3)
 
-        # Robot
+        # vehicle
         plt.scatter(myrobot.x, myrobot.y, color='purple', s=50, edgecolors='black', label='Vehicle (ground truth)')
 
         # estimation
@@ -658,28 +644,30 @@ def particle_filter(N, myrobot, motions, presetStreetnames):
 
 # we have street name with according coordinate where the car sees/'detects' it 
 # and whether its a bus stop or not[which is the boolean value]
+#correct data
 presetStreetnames = [['Lille', Point(26.7264392, 58.3747761), False], ['Lille', Point(26.7276707, 58.3750425), False],
                  ['Kalevi', Point(26.7293673, 58.3744809), False], ['Kalevi', Point(26.7311323, 58.3731457), False],
                  ['Kalevi', Point(26.7316183, 58.3727623), False], ['Kalevi', Point(26.7318824, 58.3725216), False],
                  ['Pargi', Point(26.7300876, 58.3721551), False], ['Pargi', Point(26.7284825, 58.3716853), False],
                  ['Tähe', Point(26.7273889, 58.370436), False],['Eha', Point(26.7277736, 58.3698797), True],
                  ['Tähe', Point(26.7278322, 58.3697956), False]]
+#corrupted data, chnaged Kalevi to Turu or Võru
 presetStreetnames1 = [['Lille', Point(26.7264392, 58.3747761), False], ['Lille', Point(26.7276707, 58.3750425), False],
                  ['Võru', Point(26.7293673, 58.3744809), False], ['Võru', Point(26.7311323, 58.3731457), False],
                  ['Võru', Point(26.7316183, 58.3727623), False], ['Kalevi', Point(26.7318824, 58.3725216), False],
                  ['Pargi', Point(26.7300876, 58.3721551), False], ['Pargi', Point(26.7284825, 58.3716853), False],
                  ['Tähe', Point(26.7273889, 58.370436), False],['Eha', Point(26.7277736, 58.3698797), True],
                  ['Tähe', Point(26.7278322, 58.3697956), False]]
-
+#data for out-of-bounds experiment
 presetStreetnames2 = [['Turu ring', Point(26.7370483, 58.3430137), True], ['Tähe', Point(26.7333314, 58.3430233), False],
                       ['Tähe', Point(26.7316678, 58.3430314), False], ['Tähe', Point(26.7312362, 58.341962), False],
                       ['Tähe', Point(26.7313399, 58.3408762), False]]
 
-
+#give small noise to the recordings
 for i, (name, geometry, bus_stop) in enumerate(presetStreetnames):
     theta = 0.0001
     presetStreetnames[i] = (name, Point(geometry.x+theta, geometry.y+theta), bus_stop)
-
+#convert to correct format
 presetStreetnames = gpd.GeoDataFrame(presetStreetnames, columns=['name', 'geometry', 'bus_stop'])
 presetStreetnames.crs = 'epsg:4326'
 presetStreetnames = presetStreetnames.to_crs(utm_crs)
@@ -693,22 +681,24 @@ preset_x = [x for x, y in zip(presetStreetnames.geometry.x, presetStreetnames.ge
 preset_y = [y for x, y in zip(presetStreetnames.geometry.x, presetStreetnames.geometry.y)]
 errors = []
 
-#particles = initialize_particles_near_roads(2500, edges)
 
 #evaluate_particle_filter(2500, myrobot, particles, motions, presetStreetnames.geometry)
-#particle_amount = [500, 1000, 1250, 1500, 2000, 2250, 2500, 2750, 3000, 3250, 3500, 4000]
+#particle_amount = [500, 1000, 1250, 1500, 2000, 2250, 2500, 2750, 3000, 3250, 3500, 4000]#for comparing particle counts
 #compare_particle_counts(particle_amount, myrobot, motions, presetStreetnames)
 
 #this is for testing outside of bounds case
+#added artificial motions to keep the vehicle moving
 '''motions[-1][-1]
 motions.append((0.75, 50, motions[-1][-2], motions[-1][-1]))
 for i in range(15):
     motions.append((0.0, 50, motions[-1][-2], motions[-1][-1]))
 '''
-particle_amount = [2000]
-compare_particle_counts(particle_amount, myrobot, motions, presetStreetnames)
-'''start = time.time()
-particle_filter(2000, myrobot, motions, presetStreetnames)
+#particle_amount = [2000]
+#compare_particle_counts(particle_amount, myrobot, motions, presetStreetnames)
+
+#the main testing part
+start = time.time()
+particle_filter(2000, myrobot, motions, presetStreetnames)#tried with 1500, 2000, 2500, 3000
 end = time.time()
 print("Execution time: ",end-start)
 freeimage.download()
@@ -718,4 +708,4 @@ for file_name in sorted(os.listdir(frame_folder)):
         file_path = os.path.join(frame_folder, file_name)
         images.append(imageio.v2.imread(file_path))
 
-imageio.mimsave("particle_filter.gif", images, duration=10.0, plugin='pyav')'''
+imageio.mimsave("particle_filter.gif", images, duration=10.0, plugin='pyav')
